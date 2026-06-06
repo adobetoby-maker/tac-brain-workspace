@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# para-url — One-shot URL ingest into PARA with smart auto-classification
+#
+# Usage:
+#   para-url https://...                   → auto-classify to 3-resources/inbox
+#   para-url https://... --idea            → route to 5-potential pipeline
+#   para-url https://... --project nexus  → route to 1-projects/nexus
+#   para-url https://... --resource docs  → route to 3-resources/docs
+#
+# Auto-classify rules (keyword detection in domain/path):
+#   github.com/*/issues, stackoverflow, docs.*, *.dev, api.* → 3-resources/
+#   youtube.com, x.com, twitter.com, linkedin.com           → 5-potential/inbox (ideas)
+#   producthunt.com, indiehackers.com                       → 5-potential/inbox (ideas)
+#   everything else                                          → 3-resources/inbox
+
+set -euo pipefail
+export PATH="/opt/homebrew/bin:/usr/local/bin:/Users/drive/.claude/bin:$PATH"
+
+URL="${1:-}"
+[[ -z "$URL" ]] && { echo "Usage: para-url <url> [--idea|--project NAME|--resource DIR]"; exit 1; }
+
+shift || true
+IDEA=0; PROJECT=""; RESOURCE=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --idea)     IDEA=1;         shift ;;
+    --project)  PROJECT="$2";   shift 2 ;;
+    --resource) RESOURCE="$2";  shift 2 ;;
+    *) shift ;;
+  esac
+done
+
+# Auto-classify if no explicit flag
+if [[ $IDEA -eq 0 && -z "$PROJECT" && -z "$RESOURCE" ]]; then
+  if echo "$URL" | grep -qiE "youtube\.com|youtu\.be|x\.com|twitter\.com|linkedin\.com|producthunt\.com|indiehackers\.com|news\.ycombinator\.com"; then
+    echo "🔮 Auto-classified as idea (social/discovery URL)"
+    IDEA=1
+  elif echo "$URL" | grep -qiE "github\.com/[^/]+/[^/]+/issues|stackoverflow\.com|docs\.|\.dev|/api-reference|/documentation|/reference"; then
+    echo "📚 Auto-classified as resource (docs/tech URL)"
+    RESOURCE="inbox"
+  else
+    RESOURCE="inbox"
+  fi
+fi
+
+# Route to correct PARA location
+if [[ $IDEA -eq 1 ]]; then
+  # Drop into 5-potential as a URL-sourced idea
+  SLUG=$(echo "$URL" | sed 's|https\?://||' | tr '/:?=&.' '-' | tr -cd '[:alnum:]-' | cut -c1-50)
+  TITLE="URL idea: $SLUG"
+  ITEM_FILE="$HOME/knowledge-base/5-potential/inbox/$(date '+%Y-%m-%d')-url-${SLUG}.md"
+  cat > "$ITEM_FILE" << EOF
+---
+type: potential
+stage: inbox
+title: $TITLE
+source_url: $URL
+date: $(date '+%Y-%m-%d')
+---
+## Source URL
+$URL
+
+## Brain Dump
+(run potential-review $(date '+%Y-%m-%d')-url-${SLUG} to trigger swarm evaluation)
+EOF
+  echo "✅ Idea added to 5-potential/inbox: $(date '+%Y-%m-%d')-url-${SLUG}.md"
+  echo "   Review with: potential-review $(date '+%Y-%m-%d')-url-${SLUG}"
+elif [[ -n "$PROJECT" ]]; then
+  para-ingest "$URL" --project "$PROJECT"
+else
+  para-ingest "$URL" --resource "${RESOURCE:-inbox}"
+fi

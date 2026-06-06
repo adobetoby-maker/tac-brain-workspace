@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# para-clip — Ingest whatever is on the clipboard into PARA
+#
+# Handles:
+#   URL on clipboard  → para-url (with auto-classify)
+#   Text on clipboard → writes to PARA-Inbox as .md file for watcher
+#   File path         → para-ingest <path>
+#
+# Usage: para-clip [--idea] [--project NAME]
+
+set -euo pipefail
+export PATH="/opt/homebrew/bin:/usr/local/bin:/Users/drive/.claude/bin:$PATH"
+
+CLIP=$(pbpaste 2>/dev/null || echo "")
+[[ -z "$CLIP" ]] && { echo "❌ Clipboard is empty"; exit 1; }
+
+IDEA=0; PROJECT=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --idea)    IDEA=1;       shift ;;
+    --project) PROJECT="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+
+CLIP_TRIMMED=$(echo "$CLIP" | head -1 | tr -d '[:space:]')
+
+if echo "$CLIP_TRIMMED" | grep -qE '^https?://'; then
+  # URL
+  echo "🌐 Clipboard URL: $CLIP_TRIMMED"
+  ARGS="$CLIP_TRIMMED"
+  [[ $IDEA -eq 1 ]] && ARGS="$ARGS --idea"
+  [[ -n "$PROJECT" ]] && ARGS="$ARGS --project $PROJECT"
+  para-url $ARGS
+
+elif [[ -f "$CLIP_TRIMMED" ]]; then
+  # File path
+  echo "📄 Clipboard file path: $CLIP_TRIMMED"
+  para-ingest "$CLIP_TRIMMED" ${PROJECT:+--project "$PROJECT"}
+
+else
+  # Raw text — write as markdown note to PARA-Inbox
+  echo "📝 Clipboard text ($(echo "$CLIP" | wc -w | tr -d ' ') words)"
+  SLUG=$(date '+%Y%m%d-%H%M%S')
+  OUT="$HOME/PARA-Inbox/clip-${SLUG}.md"
+  cat > "$OUT" << EOF
+---
+source: clipboard
+date: $(date '+%Y-%m-%d %H:%M:%S')
+---
+$CLIP
+EOF
+  echo "✅ Saved to PARA-Inbox/clip-${SLUG}.md (watcher will index it)"
+fi

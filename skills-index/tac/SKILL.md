@@ -335,7 +335,66 @@ if [ -f "$TODOS" ]; then
 fi
 ```
 
-## Step 9: Topic Focus
+## Step 9: PARA Panel — Last 10 Entries + Pipeline Status
+
+Show the 10 most recently touched PARA items and pipeline queue so they can be recalled or pushed into the workspace:
+
+```bash
+echo ""
+echo "╔══════════════════════════════════════════════════════════════╗"
+echo "║                PARA KNOWLEDGE BASE                           ║"
+echo "╠══════════════════════════════════════════════════════════════╣"
+echo "║  10 MOST RECENT ENTRIES                                      ║"
+echo "╠══════════════════════════════════════════════════════════════╣"
+KB="$HOME/knowledge-base"
+# Find 10 most recently modified .md files across all PARA sections, exclude _* files and README
+find "$KB/1-projects" "$KB/2-areas" "$KB/3-resources" "$KB/4-archives" "$KB/5-potential" \
+  -name "*.md" ! -name "_*" ! -name "README*" \
+  2>/dev/null | \
+  xargs ls -t 2>/dev/null | head -10 | while read -r f; do
+    SECTION=$(echo "$f" | sed "s|$KB/||" | cut -d'/' -f1)
+    TITLE=$(grep "^title:" "$f" 2>/dev/null | sed 's/title: //' | cut -c1-40 || \
+            head -2 "$f" | grep "^# " | sed 's/# //' | cut -c1-40 || \
+            basename "$f" .md | tr '-_' ' ' | cut -c1-40)
+    DATE=$(stat -f "%Sm" -t "%Y-%m-%d" "$f" 2>/dev/null || date '+%Y-%m-%d')
+    ICON="📄"
+    case "$SECTION" in
+      1-projects)  ICON="🏗️" ;;
+      2-areas)     ICON="🗂️" ;;
+      3-resources) ICON="📚" ;;
+      4-archives)  ICON="🗄️" ;;
+      5-potential) ICON="💡" ;;
+    esac
+    LINE="  $ICON [$DATE] $TITLE"
+    printf "║%-62s║\n" "$LINE"
+  done
+echo "╠══════════════════════════════════════════════════════════════╣"
+echo "║  PIPELINE QUEUE (5-potential)                                ║"
+echo "╠══════════════════════════════════════════════════════════════╣"
+INBOX_COUNT=$(ls "$KB/5-potential/inbox/"*.md 2>/dev/null | wc -l | tr -d ' ')
+REVIEW_COUNT=$(ls "$KB/5-potential/in-review/"*.md 2>/dev/null | wc -l | tr -d ' ')
+APPROVED_COUNT=$(ls "$KB/5-potential/approved/"*.md 2>/dev/null | wc -l | tr -d ' ')
+printf "║  %-60s║\n" "  📥 inbox: $INBOX_COUNT   🔬 in-review: $REVIEW_COUNT   ✅ approved: $APPROVED_COUNT"
+# Show latest 3 inbox ideas by name
+ls -t "$KB/5-potential/inbox/"*.md 2>/dev/null | head -3 | while read -r f; do
+  TITLE=$(grep "^title:" "$f" 2>/dev/null | sed 's/title: //' | cut -c1-50 || basename "$f" .md | cut -c1-50)
+  printf "║  %-60s║\n" "  💡 $TITLE"
+done 2>/dev/null || true
+echo "╠══════════════════════════════════════════════════════════════╣"
+echo "║  QUICK COMMANDS                                              ║"
+echo "║  para-ingest <file|url>         → index any doc/URL         ║"
+echo "║  para-url <url>                 → smart URL classify+ingest  ║"
+echo "║  para-clip                      → ingest clipboard now       ║"
+echo "║  potential-add \"idea\"           → SEED mind/plan doc         ║"
+echo "║  potential-review <slug>        → trigger swarm pipeline     ║"
+echo "║  potential-status               → full pipeline view         ║"
+echo "║  para-search \"query\"            → semantic+keyword search    ║"
+echo "║  Drop any file → ~/PARA-Inbox/  → auto-indexed by watcher   ║"
+echo "╚══════════════════════════════════════════════════════════════╝"
+echo ""
+```
+
+## Step 10: Topic Focus
 
 Check if a topic was passed as an argument to `/tac`:
 

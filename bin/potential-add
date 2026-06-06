@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+# potential-add — Create a full SEED mind/plan doc in 5-potential pipeline
+#
+# Usage:
+#   potential-add "idea description"
+#   potential-add "idea" --doc /path/to/brief.pdf     → extract + embed doc content
+#   potential-add "idea" --video https://youtube.com/... → embed video reference
+#   potential-add "idea" --effort S|M|L|XL             → size estimate
+#   potential-add --doc /path/to/brief.pdf             → auto-title from filename
+#   potential-add "idea" --seed                        → write full SEED template (default)
+#   potential-add "idea" --quick                       → minimal stub (old behaviour)
+
+set -euo pipefail
+KB_INBOX="$HOME/knowledge-base/5-potential/inbox"
+VAULT="/Users/drive/Library/Mobile Documents/iCloud~md~obsidian/Documents/second brain"
+TODAY=$(date '+%Y-%m-%d')
+export PATH="/opt/homebrew/bin:/usr/local/bin:/Users/drive/.claude/bin:$PATH"
+
+IDEA="" DOC="" VIDEO="" EFFORT="M" QUICK=0 QUIET=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --doc)    DOC="$2";    shift 2 ;;
+    --video)  VIDEO="$2";  shift 2 ;;
+    --effort) EFFORT="$2"; shift 2 ;;
+    --quick)  QUICK=1;     shift ;;
+    --seed)   QUICK=0;     shift ;;
+    --quiet)  QUIET=1;     shift ;;
+    --*)      echo "Unknown flag: $1"; exit 1 ;;
+    *)        IDEA="$1";   shift ;;
+  esac
+done
+
+# Auto-title from doc filename if no idea given
+if [[ -z "$IDEA" && -n "$DOC" ]]; then
+  IDEA=$(basename "$DOC" | sed 's/\.[^.]*$//' | tr '-_' ' ' | sed 's/\b./\u&/g')
+fi
+[[ -z "$IDEA" ]] && { echo "Usage: potential-add \"idea\" [--doc file] [--video url] [--effort S|M|L|XL]"; exit 1; }
+
+# Create slug
+SLUG=$(echo "$IDEA" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd '[:alnum:]-' | cut -c1-50)
+SLUG="${TODAY}-${SLUG}"
+ITEM_FILE="$KB_INBOX/$SLUG.md"
+
+[[ $QUIET -eq 0 ]] && echo "📥 Adding to 5-potential pipeline: $IDEA"
+
+# Convert doc if provided
+DOC_CONTENT=""
+if [[ -n "$DOC" && -f "$DOC" ]]; then
+  [[ $QUIET -eq 0 ]] && echo "   📄 Converting doc: $(basename "$DOC")"
+  DOC_CONTENT=$(markitdown "$DOC" 2>/dev/null | head -c 6000 || echo "(doc conversion failed)")
+fi
+
+if [[ $QUICK -eq 1 ]]; then
+  # ── Minimal stub (legacy behaviour) ──────────────────────────────────
+  cat > "$ITEM_FILE" << EOF
+---
+type: potential
+stage: inbox
+title: $IDEA
+slug: $SLUG
+date: $TODAY
+effort: $EFFORT
+source_doc: ${DOC:-}
+source_video: ${VIDEO:-}
+---
+## Idea
+$IDEA
+$([ -n "$VIDEO" ] && echo "" && echo "**Video:** $VIDEO")
+$([ -n "$DOC_CONTENT" ] && echo "" && echo "## Doc Content" && echo "$DOC_CONTENT")
+
+## Pipeline Status
+- [ ] Swarm brainstorm
+- [ ] 9/5 Feasibility score
+- [ ] CEO plan review
+- [ ] Human gate (Toby)
+- [ ] Decision: approved / declined
+EOF
+else
+  # ── Full SEED mind/plan document ─────────────────────────────────────
+  TEMPLATE="$HOME/knowledge-base/5-potential/_SEED-TEMPLATE.md"
+  if [[ -f "$TEMPLATE" ]]; then
+    sed \
+      -e "s/TITLE_PLACEHOLDER/$IDEA/g" \
+      -e "s/SLUG_PLACEHOLDER/$SLUG/g" \
+      -e "s/DATE_PLACEHOLDER/$TODAY/g" \
+      "$TEMPLATE" > "$ITEM_FILE"
+
+    # Update effort in frontmatter
+    sed -i '' "s/effort: M/effort: $EFFORT/" "$ITEM_FILE"
+
+    # Append video reference if provided
+    if [[ -n "$VIDEO" ]]; then
+      echo "" >> "$ITEM_FILE"
+      echo "---" >> "$ITEM_FILE"
+      echo "## Source Video" >> "$ITEM_FILE"
+      echo "$VIDEO" >> "$ITEM_FILE"
+    fi
+
+    # Append doc content if provided
+    if [[ -n "$DOC_CONTENT" ]]; then
+      echo "" >> "$ITEM_FILE"
+      echo "---" >> "$ITEM_FILE"
+      echo "## Source Doc: $(basename "$DOC")" >> "$ITEM_FILE"
+      echo "" >> "$ITEM_FILE"
+      echo "$DOC_CONTENT" >> "$ITEM_FILE"
+    fi
+  else
+    # Template missing — generate inline
+    cat > "$ITEM_FILE" << EOF
+---
+type: seed
+stage: inbox
+title: $IDEA
+slug: $SLUG
+date: $TODAY
+effort: $EFFORT
+status: seed
+score_total: 0
+---
+
+# $IDEA
+
+> One sentence that makes someone want to know more.
+
+## The Problem
+-
+
+## The Solution
+-
+
+## Target User
+- **Who:**
+- **Job-to-be-done:**
+- **Current workaround:**
+
+## Revenue Model
+| Model | Price |
+|---|---|
+| Monthly | $__ |
+| Annual | $__ |
+
+## Tech Stack
+| Layer | Choice |
+|---|---|
+| Frontend | |
+| Backend | |
+| Database | |
+
+## Effort: $EFFORT
+
+## Mind Map
+\`\`\`
+$IDEA
+├── Core loop
+│   └── ?
+├── Distribution
+│   └── ?
+└── Risks
+    └── ?
+\`\`\`
+
+## 9/5 Score: TBD / 45
+
+## Next Action
+> ?
+
+## Brain Dump
+$([ -n "$VIDEO" ] && echo "**Video:** $VIDEO")
+$([ -n "$DOC_CONTENT" ] && echo "$DOC_CONTENT")
+
+## History
+| Date | Event |
+|---|---|
+| $TODAY | Created |
+EOF
+  fi
+fi
+
+# ── Sync to Obsidian pipeline vault ─────────────────────────────────────
+OB_DIR="$VAULT/Projects/Pipeline"
+mkdir -p "$OB_DIR" 2>/dev/null || true
+cp "$ITEM_FILE" "$OB_DIR/$SLUG.md" 2>/dev/null && \
+  [[ $QUIET -eq 0 ]] && echo "   🧠 Synced to Obsidian vault" || true
+
+# ── Index to AgentDB ────────────────────────────────────────────────────
+if command -v claude-flow &>/dev/null; then
+  SNIPPET=$(head -c 3000 "$ITEM_FILE")
+  claude-flow memory store \
+    --key "para_potential_$SLUG" \
+    --value "$SNIPPET" \
+    --namespace "knowledge-base" \
+    --quiet 2>/dev/null && \
+    [[ $QUIET -eq 0 ]] && echo "   🔍 Indexed to AgentDB" || true
+fi
+
+if [[ $QUIET -eq 0 ]]; then
+  echo ""
+  echo "✅ Seed created: $SLUG"
+  echo ""
+  echo "   Edit:    open $ITEM_FILE"
+  echo "   Review:  potential-review $SLUG"
+  echo "   Status:  potential-status"
+fi
