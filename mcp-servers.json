@@ -1,0 +1,38 @@
+{
+  "mcpServers": {
+    "oauth-gateway": {
+      "command": "mcp-oauth-gateway",
+      "args": [
+        "start"
+      ],
+      "description": "Max plan OAuth gateway \u2014 auth_status, token_refresh, agent_credits, spawn_agent, run_agent"
+    },
+    "oauth-gateway-py": {
+      "command": "/Users/drive/mcp-oauth-gateway/python/.venv/bin/python",
+      "args": [
+        "-m",
+        "mcp_oauth_gateway.server"
+      ],
+      "description": "Python FastMCP proxy for oauth-gateway (Ruflo integration)"
+    },
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest"
+      ],
+      "description": "Browser automation \u2014 Scout + Wizard browser tasks"
+    },
+    "imessage": {
+      "command": "bun",
+      "args": [
+        "run",
+        "--cwd",
+        "/Users/drive/.claude/plugins/cache/claude-plugins-official/imessage/0.1.0",
+        "--shell=bun",
+        "--silent",
+        "start"
+      ],
+      "description": "iMessage \u2014 Wizard notifies Maxwell on task complete"
+    }
+  }
+}
