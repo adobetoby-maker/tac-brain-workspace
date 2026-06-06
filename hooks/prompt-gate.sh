@@ -1,7 +1,7 @@
 #!/bin/bash
 # UserPromptSubmit hook — fires before Claude processes every user message
-# Purpose: force "check own files first" before external research
-# This closes the 0.9 gap — fires in the window between user message and first tool call
+# Output: JSON {"additionalContext":"..."} — injected into reasoning context, not just terminal
+# Two gates: SKILL GATE (precise skill→task map) + FILES-FIRST GATE (local before external)
 
 INPUT=$(cat)
 PROMPT=$(echo "$INPUT" | python3 -c "
@@ -13,84 +13,149 @@ except:
     print('')
 " 2>/dev/null)
 
-# Fire on any research/build/look/find/show/what/add intent
-if echo "$PROMPT" | grep -qE "(research|look at|show me|what (do|does|is)|find|check|add|build|create|fix|update|debug|can you see|do you see|what.*site|what.*project)"; then
+[[ -z "$PROMPT" ]] && exit 0
 
-  # Check for existing project match by scanning for project-like words in prompt
-  PROJECTS=$(ls /Users/drive/ 2>/dev/null | grep -vE "^(Applications|Desktop|Documents|Downloads|Library|Movies|Music|Pictures|Public|Parallels)" | grep -v "\." | head -40 | tr '\n' '|' | sed 's/|$//')
+SKILL_NAME=""
+SKILL_REASON=""
+FILES_GATE=false
 
-  echo "╔══════════════════════════════════════════════════════════╗"
-  echo "║  PROMPT GATE — check own files BEFORE external research  ║"
-  echo "╚══════════════════════════════════════════════════════════╝"
-  echo ""
-  echo "Step 1: ls /Users/drive/ — does a project directory exist?"
-  echo "Step 2: Check CLAUDE.md project table"
-  echo "Step 3: Check ~/.claude/projects/-Users-drive/memory/"
-  echo "Step 4: mem-search for relevant prior work"
-  echo "Step 5: ONLY THEN use WebSearch / WebFetch for external data"
-  echo ""
-  echo "Skill check — does this task match?"
-  echo "  'look at / show me / what does' → check local files first"
-  echo "  'add photos / real images'      → seo-images skill, then check project at ls /Users/drive/"
-  echo "  'marketing plan / eval'         → content-strategy skill"
-  echo "  'build / create site'           → ls scores.md || echo MISSING"
-  echo "  'fix / debug'                   → systematic-debugging skill"
-  echo ""
+# ── SKILL GATE ─────────────────────────────────────────────────────────────────
+# 18 task→skill patterns. When matched, inject exact Skill() call into context.
 
-  # ── AGENT/SKILL CLASSIFIER ─────────────────────────────────────────────
-  # Classify task type → surface optimal agent/skill
-  AGENT_HINT=""
-  SKILL_HINT=""
+if echo "$PROMPT" | grep -qiE "(build (a |the )?((new )?site|website|landing page|page for)|create (a |the )?((new )?site|website)|new site|make.*website|website for|mvp for|build.*(web app|app for))"; then
+  SKILL_NAME="landing-page-generator"
+  SKILL_REASON="new site / landing page detected — research-first (ls scores.md) required"
+fi
 
-  # Research / knowledge queries
-  if echo "$PROMPT" | grep -qiE "(research|what is|who is|find out|explain|summarise|summarize|look up|investigate|competitive|market|seo audit)"; then
-    AGENT_HINT="Scholar"
-    SKILL_HINT="scholar \"$( echo "$PROMPT" | head -c 60 )\""
-  fi
+if echo "$PROMPT" | grep -qiE "(write (a |the )?(blog|post|article)|blog post|seo post|content piece|long-form|[0-9][,0-9]*[- ]word (post|article|piece))"; then
+  SKILL_NAME="seo-aeo-blog-writer"
+  SKILL_REASON="blog / article writing"
+fi
 
-  # Browser / visual site checks
-  if echo "$PROMPT" | grep -qiE "(browse|check (the |this )?(site|page|url)|screenshot|visual qa|look at.*site|verify.*live|test.*live|open.*browser)"; then
-    AGENT_HINT="Scout"
-    SKILL_HINT="scout \"$( echo "$PROMPT" | head -c 60 )\""
-  fi
+if echo "$PROMPT" | grep -qiE "(keyword research|keyword strategy|keyword map|seo audit|crawl|search ranking|search visibility|on-?page seo|technical seo)"; then
+  SKILL_NAME="seo-keyword-strategist"
+  SKILL_REASON="SEO / keyword work"
+fi
 
-  # Computer / terminal / app tasks (Maxwell's Wizard)
-  if echo "$PROMPT" | grep -qiE "(computer|open (app|application)|click|type into|fill (in|out)|automate|wizard|display|screen|local app|run (a )?script on)"; then
-    AGENT_HINT="Wizard"
-    SKILL_HINT="wizard \"$( echo "$PROMPT" | head -c 60 )\""
-  fi
+if echo "$PROMPT" | grep -qiE "(landing page copy|above.the.fold|hero copy|cta copy|conversion copy|write (the )?copy|sales page|write.*headline|value proposition copy)"; then
+  SKILL_NAME="seo-aeo-landing-page-writer"
+  SKILL_REASON="landing page copy"
+fi
 
-  # Build / feature / new project
-  if echo "$PROMPT" | grep -qiE "^(build|add (a |the )?feature|create (a |the )?new|scaffold|implement|add support for)"; then
-    AGENT_HINT="writing-plans → subagent-driven"
-    SKILL_HINT="Invoke: writing-plans skill first, then subagent-driven-development"
-  fi
+if echo "$PROMPT" | grep -qiE "(content (plan|strategy|calendar|cluster|roadmap)|topic cluster|content map|marketing plan|editorial plan|pillar (page|post)|topical authority)"; then
+  SKILL_NAME="content-strategy"
+  SKILL_REASON="content strategy / plan"
+fi
 
-  # Debug / fix / error
-  if echo "$PROMPT" | grep -qiE "^(fix|debug|error|broken|failing|crash|exception|not working|why (is|does|isn't))"; then
-    AGENT_HINT="systematic-debugging"
-    SKILL_HINT="Invoke: systematic-debugging skill before writing any code"
-  fi
+if echo "$PROMPT" | grep -qiE "(competitor|competitive analysis|compare (to |against )?|benchmark (against|vs)|market leader|how does.*compare|what (do|does) (the )?competitor)"; then
+  SKILL_NAME="competitor-profiling"
+  SKILL_REASON="competitor / market research"
+fi
 
-  # Visual / animation / scroll
-  if echo "$PROMPT" | grep -qiE "(animation|scroll|transition|motion|framer|threejs|r3f|parallax|hover effect)"; then
-    AGENT_HINT="record.js + visual-loop"
-    SKILL_HINT="node ~/record.js <port>  →  visual-loop skill"
-  fi
+if echo "$PROMPT" | grep -qiE "(ui component|new component|design (a |the )?(button|card|hero|section|modal|sidebar|nav|header|footer)|add (a |the )?(hero|section|component|card|banner)|redesign (the )?(page|section|layout))"; then
+  SKILL_NAME="ui-ux-pro-max"
+  SKILL_REASON="UI design — run UUPM design_system.py first"
+fi
 
-  # Deploy / ship intent
-  if echo "$PROMPT" | grep -qiE "^(ship|deploy|push (to )?prod|go live|launch|release)"; then
-    AGENT_HINT="/10xit first"
-    SKILL_HINT="Run /10xit to score before shipping — gates: tsc + lint + visual + SEO + live URL"
-  fi
+if echo "$PROMPT" | grep -qiE "(add (auth|login|signup|registration|authentication|sign.?in)|auth (flow|system|provider)|oauth|supabase auth|nextauth|magic link|password reset)"; then
+  SKILL_NAME="nextjs-supabase-auth"
+  SKILL_REASON="auth implementation"
+fi
 
-  # Output classifier hint if matched
-  if [ -n "$AGENT_HINT" ]; then
-    echo "┌─────────────────────────────────────────────────────────────┐"
-    echo "│  NEURAL ROUTER                                              │"
-    printf "│  Task type detected: %-40s│\n" "$AGENT_HINT"
-    printf "│  → %-57s│\n" "$SKILL_HINT"
-    echo "└─────────────────────────────────────────────────────────────┘"
-    echo ""
-  fi
+if echo "$PROMPT" | grep -qiE "(supabase (schema|table|migration|rls|policy|function|edge function)|create (table|schema|migration)|alter table|add (column|index|foreign key)|database (design|schema))"; then
+  SKILL_NAME="supabase-automation"
+  SKILL_REASON="Supabase / database schema work"
+fi
+
+if echo "$PROMPT" | grep -qiE "(cloudflare worker|wrangler|d1 database|r2 bucket|kv (store|namespace)|worker (cron|route|binding)|cf worker)"; then
+  SKILL_NAME="cloudflare-workers-expert"
+  SKILL_REASON="Cloudflare Workers / wrangler work"
+fi
+
+if echo "$PROMPT" | grep -qiE "(animation|framer motion|scroll (effect|animation)|parallax|three\.?js|r3f|react.three|shader|glsl|3d (scene|model|component)|gsap|spring animation)"; then
+  SKILL_NAME="animejs-animation"
+  SKILL_REASON="animation / 3D — record.js required before AND after changes"
+fi
+
+if echo "$PROMPT" | grep -qiE "(add (photos?|images?|pictures?)|source (photos?|images?)|photo for|image for|hero image|real (photos?|images?)|stock (photos?|images?))"; then
+  SKILL_NAME="seo-images"
+  SKILL_REASON="image sourcing"
+fi
+
+if echo "$PROMPT" | grep -qiE "(review (this |the )?code|code review|audit (the |this )?code|check (this |the )?(code|implementation)|production audit)"; then
+  SKILL_NAME="production-code-audit"
+  SKILL_REASON="code review"
+fi
+
+if echo "$PROMPT" | grep -qiE "^(fix|debug|error|broken|failing|crash|exception|not working|it'?s broken|doesn'?t work|something'?s wrong|why (is|does|isn'?t|doesn'?t|can'?t|won'?t))"; then
+  SKILL_NAME="systematic-debugging"
+  SKILL_REASON="debug / fix task — BEFORE writing any code"
+fi
+
+if echo "$PROMPT" | grep -qiE "(security audit|vuln|owasp|xss|sql injection|csrf|path traversal|pentest|security review|attack surface)"; then
+  SKILL_NAME="cso"
+  SKILL_REASON="security audit"
+fi
+
+if echo "$PROMPT" | grep -qiE "(playwright (test|spec|e2e)|e2e test|end.to.end test|browser test|test.*flow|test.*checkout|test.*login|automation test)"; then
+  SKILL_NAME="playwright-skill"
+  SKILL_REASON="E2E / Playwright testing"
+fi
+
+if echo "$PROMPT" | grep -qiE "(write (the )?(copy|tagline|headline|about (us|section)|hero text)|rewrite (the )?copy|improve (the )?copy|conversion copy)"; then
+  SKILL_NAME="copywriting"
+  SKILL_REASON="copywriting / conversion copy"
+fi
+
+if echo "$PROMPT" | grep -qiE "^(plan|design the architecture|architect|how should (i|we) (build|implement|structure)|what'?s? the best (way|approach) to (build|implement)|think through|walk me through (building|implementing))"; then
+  SKILL_NAME="writing-plans"
+  SKILL_REASON="architecture / planning — plan before any code"
+fi
+
+if echo "$PROMPT" | grep -qiE "^(ship|deploy (to )?(prod|production|vercel|live)|push to (prod|main|live)|go live|launch (the )?(site|app|feature)|release)"; then
+  SKILL_NAME="vercel-deployment"
+  SKILL_REASON="deploy / ship — quality gate (tsc+lint+build) first"
+fi
+
+# ── FILES-FIRST gate ───────────────────────────────────────────────────────────
+if echo "$PROMPT" | grep -qE "(research|look at|show me|what (do|does|is)|find|check|add|build|create|fix|update|debug|can you see|do you see|what.*site|what.*project|how does|tell me about|what happened|remember)"; then
+  FILES_GATE=true
+fi
+
+# ── Output: JSON additionalContext ─────────────────────────────────────────────
+# Plain echo goes to terminal only. JSON additionalContext is injected into
+# Claude's reasoning context — this is the critical difference for enforcement grade.
+
+if [ -n "$SKILL_NAME" ] || [ "$FILES_GATE" = "true" ]; then
+  python3 - "$SKILL_NAME" "$SKILL_REASON" "$FILES_GATE" << 'PYEOF'
+import sys, json
+
+skill     = sys.argv[1]   # may be empty string
+reason    = sys.argv[2]   # may be empty string
+files_gate = sys.argv[3] == "true"
+
+parts = []
+
+if skill:
+    parts.append(f"""╔══ SKILL GATE [NON-NEGOTIABLE] ════════════════════════════════╗
+║  Task pattern matched: {reason}
+║  REQUIRED FIRST ACTION — before ANY reasoning, explanation, or code:
+║
+║    Skill({{ "skill": "{skill}" }})
+║
+║  Invoking this skill is an Iron Law from skill-invocation-order.md.
+║  Do NOT reason through the task first. Do NOT explain what you will do.
+║  Invoke the skill. Then follow it.
+╚═══════════════════════════════════════════════════════════════╝""")
+
+if files_gate:
+    parts.append("""FILES-FIRST GATE: Check own files BEFORE any WebSearch or WebFetch.
+  1. ls /Users/drive/ — project directory exists?
+  2. CLAUDE.md project table
+  3. mem-search prior work
+  4. ONLY THEN: external research""")
+
+context = "\n\n".join(parts)
+print(json.dumps({"additionalContext": context}))
+PYEOF
 fi

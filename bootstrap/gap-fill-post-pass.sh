@@ -120,6 +120,40 @@ mkdir -p "$(dirname "$SYNC_MARKER")"
 touch "$SYNC_MARKER"
 echo "   ✅ Sync marker updated: $(date '+%Y-%m-%d %H:%M')"
 
+# ── Fix 6: Index Obsidian second-brain vault to AgentDB ───────────────────
+echo ""
+echo "── Fix 6: Obsidian→AgentDB sync ──"
+OBSIDIAN_VAULT="$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/second brain"
+OBS_INDEXED=0
+if [ -d "$OBSIDIAN_VAULT" ]; then
+  # Index any Obsidian file newer than sync marker (or last 24h on first run)
+  if [ -f "$SYNC_MARKER" ]; then
+    OBS_FILES=$(find "$OBSIDIAN_VAULT" -name "*.md" ! -name "_*" ! -name "Untitled*" \
+      -newer "$SYNC_MARKER" 2>/dev/null)
+  else
+    OBS_FILES=$(find "$OBSIDIAN_VAULT" -name "*.md" ! -name "_*" ! -name "Untitled*" \
+      -mtime -1 2>/dev/null)
+  fi
+  if [ -n "$OBS_FILES" ]; then
+    while IFS= read -r f; do
+      [ -f "$f" ] || continue
+      SLUG=$(basename "$f" .md | tr '/ ' '_' | tr -cd '[:alnum:]_-')
+      if command -v claude-flow &>/dev/null; then
+        claude-flow memory store \
+          --key "obs_${SLUG}" \
+          --value "$(head -c 2500 "$f")" \
+          --namespace "obsidian-vault" \
+          --quiet 2>/dev/null && OBS_INDEXED=$((OBS_INDEXED+1)) || true
+      fi
+    done <<< "$OBS_FILES"
+    echo "   ✅ Indexed $OBS_INDEXED Obsidian files to AgentDB (namespace: obsidian-vault)"
+  else
+    echo "   ✓ No new Obsidian files since last sync"
+  fi
+else
+  echo "   ⚠️  Obsidian vault not found at expected path"
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────
 END=$(date +%s)
 ELAPSED=$((END - START))
@@ -132,4 +166,5 @@ echo "║  Fix 2: KB→git         ✅"
 echo "║  Fix 3: heal→PARA      ✅"
 echo "║  Fix 4: watcher dedup  ✅"
 echo "║  Fix 5: sync marker    ✅"
+echo "║  Fix 6: Obsidian→AgentDB ✅"
 echo "╚══════════════════════════════════════════════════════════╝"
