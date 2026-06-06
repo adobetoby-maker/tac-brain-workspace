@@ -12,8 +12,8 @@ set -e
 PROJECT_REF="${1:?Usage: setup-google-oauth <project-ref> [app-url]}"
 APP_URL="${2:-}"
 
-GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:-888157046228-92jfuigpfqgqdj4vlpo7k8efd1j0r568.apps.googleusercontent.com}"
-GOOGLE_CLIENT_SECRET="${GOOGLE_CLIENT_SECRET:-REDACTED_ROTATE_THIS_SECRET}"
+GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:?Set GOOGLE_CLIENT_ID env var (from console.cloud.google.com/apis/credentials)}"
+GOOGLE_CLIENT_SECRET="${GOOGLE_CLIENT_SECRET:?Set GOOGLE_CLIENT_SECRET env var (from console.cloud.google.com/apis/credentials)}"
 
 SUPA_TOKEN=$(security find-generic-password -a "supabase" -w 2>/dev/null | sed 's/go-keyring-base64://' | base64 -d 2>/dev/null)
 if [ -z "$SUPA_TOKEN" ]; then
